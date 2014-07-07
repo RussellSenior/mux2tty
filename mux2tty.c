@@ -27,7 +27,7 @@ int print_usage (char* progname)
 {
   printf("%s usage:\n"
 	 "-h,--help        this message\n"
-	 "-T,--tty <arg>   attach to <arg> tty\n"
+	 "-t,--tty <arg>   attach to <arg> tty\n"
 	 "-b,--baud <arg>  communicate with tty at <arg> baud\n"
 	 "-p,--port <arg>  listen for tcp connections on port <arg>\n"
 	 "-v,--verbose     describe what is happening\n"
