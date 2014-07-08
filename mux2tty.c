@@ -19,6 +19,8 @@
 
 #include <time.h>
 
+#include "cbuff.h"
+
 int verbose = 0;
 
 struct termios tp, save;
@@ -104,7 +106,7 @@ int main(int argc,char** argv)
   int term = validate_terminal(termstr,baudstr);
 
   if (term < 0) {
-    printf("opening terminal %s/%s failed with error %d\n",termstr,baudstr,term);
+    printf("opening terminal %s at %s failed with error %d\n",termstr,baudstr,term);
     return -2;
   }
 
@@ -118,28 +120,56 @@ int main(int argc,char** argv)
     printf("port number = %d\n",port);
   }
 
-#define BUF_SIZE  10240
+  struct cbuff* b = NULL;
+  
+#define DELIM '\n'
 
-  char buf[BUF_SIZE];
   int len = 0;
   int nfds = 0;
 
+  b = (struct cbuff*) calloc (term + 1, sizeof(struct cbuff));
+  if (!b) {
+    printf ("failed to allocated cbuff array for tty\n");
+    return -3;
+  }
+
+  if (new_cbuff(b+term,64) < 0) {
+    printf ("failed to allocated cbuff buffer for tty\n");
+    return -4;
+  }
+ 
   fd_set sessions;
   FD_ZERO(&sessions);
 
   while (1) {
+    int pending = 0;
+    int last = 0;
 
     if (verbose) {
       printf ("tty: %d ; listening %d\n",term,port);
     }
-    fd_set readfds;
+    fd_set readfds,writefds;
     memcpy(&readfds,&sessions,sizeof(fd_set));
+    FD_ZERO(&writefds); // clear output
     FD_SET(term,&readfds); // tty
     FD_SET(port,&readfds); // listening for connections
 
+    if (pending) 
+      FD_SET(term,&writefds);
+
+    for (int fd=0 ; fd<nfds ; fd++) {
+      if (FD_ISSET(fd, &sessions)) {
+	int n = cbuf_find(b+fd,DELIM);
+	if (n)
+	  FD_SET(term,&writefds);
+      }
+    }
+    
     nfds = max_fds(&readfds);
 
-    int ready = select(nfds,&readfds,NULL,NULL,NULL);
+    b = (struct cbuff *) realloc (b,nfds * sizeof(struct cbuff));
+
+    int ready = select(nfds,&readfds,&writefds,NULL,NULL);
 
     if (verbose) 
       printf ("%d fd ready\n",ready);
@@ -154,9 +184,9 @@ int main(int argc,char** argv)
 	  }
 	  if (fd == term) {
 	    // serial data has arrived, send it to all sessions
-	    len = read (term, buf, sizeof(buf));
+	    len = read2cbuf(b+term,term);
 	    if (verbose) {
-	      printf ("read %d bytes: %s\n",len,buf);
+	      printf ("read %d bytes\n",len);
 	    }
 	    if (len < 0) {
 	      // error reading tty
@@ -173,20 +203,7 @@ int main(int argc,char** argv)
 	      if (verbose)
 		printf ("tty closed, exiting\n");
 	      return 0;
-	    } else {
-	      // got bytes from tty, echo onto all open sessions
-	      for (int i=0 ; i<nfds ; i++) {
-		if (FD_ISSET (i, &sessions)) {
-		  for(int l=0 ; l<len ; ) {
-		    int result = write (i, buf+l, len-l);
-		    if (result > 0)
-		      l += result;
-		    else
-		      printf("write failure of %d bytes to fd %d, retrying\n",len-l,i);
-		  }
-		}
-	      }
-	    }
+	    } 
 	  } else if (fd == port) {
 	    // connection request on listening port
 	    struct sockaddr_storage naddr;
@@ -206,6 +223,17 @@ int main(int argc,char** argv)
 	      FD_SET (nfd, &sessions);
 	      nfds = max_fds(&sessions);
 
+	      b = (struct cbuff *) realloc (b, nfds * sizeof(struct cbuff));
+	      if (!b) {
+		printf("failure to allocate cbuff array for %d\n",nfd);
+		return -5;
+	      }
+
+	      if (new_cbuff(b+nfd,64) < 0) {
+		printf ("failed to allocated cbuff buffer for %d\n",nfd);
+		return -6;
+	      }
+
 	      if (getnameinfo((struct sockaddr *) &naddr,addrlen,
 			      hostname,NI_MAXHOST,
 			      service,NI_MAXSERV,
@@ -216,8 +244,8 @@ int main(int argc,char** argv)
 	      }
 	    }
 	  } else {
-	    // received data from a session, send to tty
-	    len = read (fd, buf, sizeof(buf));
+	    // received data from a session
+	    len = read2cbuf (b+fd,fd);
 	    if (len < 0) {
 	      // error reading session
 	      printf ("error reading fd %d\n",fd);
@@ -228,24 +256,60 @@ int main(int argc,char** argv)
 	      if (verbose)
 		printf ("closing session %d\n",fd);
 	      close(fd);
-	    } else {
-	      if (verbose)
-		printf ("writing %s to tty\n",buf);
-	      for(int l=0 ; l<len ; ) {
-		int result = write (term, buf+l, len-l);
-		if (result > 0)
-		  l += result;
-		else {
-		  printf("write failure of %d bytes to fd %d, retrying\n",len-l,term);
-		  struct timespec nap;
-		  nap.tv_sec = 0;
-		  nap.tv_nsec = 1000000;
-		  nanosleep(&nap,NULL);
+	      free_cbuff (b+fd);
+	    } 
+	  }
+	}
+      }
+      // try to write
+      if (FD_ISSET (term, &writefds)) {
+	printf ("tty is writable\n");
+	if (pending) {
+	  printf ("serving pending buffer %d\n",pending);
+	  int n = cbuf_find(b+pending,DELIM);
+	  int len = cbuf2write(b+pending,term,n);
+	  if (len == n) {
+	    printf ("completed pending buffer %d\n",pending);
+	    pending = 0;
+	  }
+	}
+	printf ("pending = %d\n",pending);
+	if (!pending) {
+	  for (int i=0 ; i<nfds ; i++) {
+	    int fd = (last + i + 1) % nfds;
+	    if (FD_ISSET (fd, &sessions)) {
+	      int n = cbuf_find (b+fd,DELIM);
+	      printf("record delimter found at offset %d of buffer %d\n",n,fd);
+	      if (n) {
+		int len = cbuf2write(b+fd,term,n);
+		printf ("wrote %d bytes to tty from session %d\n",len,fd);
+		if (len > 0 && len < n) {
+		  pending = fd;
 		}
+		last = fd;
+		printf ("last session %d\n",last);
 	      }
 	    }
 	  }
 	}
+      }
+      // check tty cbuff for records, if ready, send to sessions
+      int n = cbuf_find(b+term,DELIM);
+      printf ("found record delimiter at %d of tty\n",n);
+      if (n) {
+	char buf[64];
+	int len = cbuf2buf (b+term,buf,n);
+	printf ("copied %d of %d chars to buffer\n",len,n);
+	for (int fd=0 ; fd<nfds ; fd++) {
+	  if (FD_ISSET (fd, &sessions)) {
+	    len = write(fd,buf,n);
+	    if (len < n) {
+	      printf ("partial write (%d of %d bytes) to session %d\n",len,n,fd);
+	    } else {
+	      printf ("wrote %d bytes to session %d\n",len,fd);
+	    }
+	  }
+	}	    
       }
     }
   }
