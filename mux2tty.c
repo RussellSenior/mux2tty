@@ -121,6 +121,7 @@ int main(int argc,char** argv)
   }
 
   struct cbuff* b = NULL;
+  struct cbuff* closed_cbuff = NULL; // why only one???
   
 #define DELIM '\n'
 
@@ -162,6 +163,10 @@ int main(int argc,char** argv)
 	int n = cbuf_find(b+fd,DELIM);
 	if (n)
 	  FD_SET(term,&writefds);
+	else if (b[fd].left == 0) 
+	  // no delimiter, buffer full, so double size
+	  if (resize_cbuff(b+fd,b[fd].len * 2) < 0)
+	    printf ("resize_cbuff session %d failed\n",fd);
       }
     }
     
@@ -196,6 +201,7 @@ int main(int argc,char** argv)
 	      for (int i=0 ; i<nfds ; i++) {
 		if (FD_ISSET (i, &sessions)) {
 		  close(i);
+		  printf ("closed session %d\n",i);
 		  FD_CLR (i, &sessions);
 		}
 	      }
@@ -255,8 +261,8 @@ int main(int argc,char** argv)
 	      nfds = max_fds(&sessions);
 	      if (verbose)
 		printf ("closing session %d\n",fd);
+	      closed_cbuff = b+fd;
 	      close(fd);
-	      free_cbuff (b+fd);
 	    } 
 	  }
 	}
@@ -275,27 +281,39 @@ int main(int argc,char** argv)
 	}
 	printf ("pending = %d\n",pending);
 	if (!pending) {
+	  if (closed_cbuff) {
+	    // so much for round-robin'ing!
+	    int n;
+	    while (n = cbuf_find (closed_cbuff,DELIM)) {
+	      int len = cbuf2write(closed_cbuff,term,n);
+	      printf ("write %d bytes to tty from closed session\n",len);
+	    }
+	    free_cbuff (closed_cbuff);
+	    closed_cbuff = NULL;
+	  }
 	  for (int i=0 ; i<nfds ; i++) {
 	    int fd = (last + i + 1) % nfds;
 	    if (FD_ISSET (fd, &sessions)) {
 	      int n = cbuf_find (b+fd,DELIM);
-	      printf("record delimter found at offset %d of buffer %d\n",n,fd);
 	      if (n) {
+		printf("record delimter found at offset %d of buffer %d\n",n,fd);
 		int len = cbuf2write(b+fd,term,n);
 		printf ("wrote %d bytes to tty from session %d\n",len,fd);
 		if (len > 0 && len < n) {
 		  pending = fd;
-		}
+		} 
 		last = fd;
 		printf ("last session %d\n",last);
-	      }
+	      } else if (b[fd].left == 0) 
+		// no delimiter, buffer full, so double size
+		if (resize_cbuff(b+fd,b[fd].len * 2) < 0)
+		  printf ("resize_cbuff session %d failed\n",fd);
 	    }
 	  }
 	}
       }
       // check tty cbuff for records, if ready, send to sessions
       int n = cbuf_find(b+term,DELIM);
-      printf ("found record delimiter at %d of tty\n",n);
       if (n) {
 	char buf[64];
 	int len = cbuf2buf (b+term,buf,n);
@@ -310,7 +328,10 @@ int main(int argc,char** argv)
 	    }
 	  }
 	}	    
-      }
+      } else if (b[term].left == 0) 
+	// no delimiter, buffer full, so double size
+	if (resize_cbuff(b+term,b[term].len * 2) < 0)
+	  printf ("resize_cbuff tty failed\n");
     }
   }
 
