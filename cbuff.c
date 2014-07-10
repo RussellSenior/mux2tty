@@ -7,6 +7,7 @@
 
 int new_cbuff (struct cbuff *cb, int n) 
 {
+  printf ("allocating new cbuff of size %d\n",n);
   cb->buff = (char *) malloc (n);
   if (!cb->buff)
     return -1;
@@ -21,7 +22,9 @@ int new_cbuff (struct cbuff *cb, int n)
 }
  
 int free_cbuff (struct cbuff *cb) {
-  free(cb->buff);
+  printf ("freeing cbuff of size %d with %d remaining unused\n",cb->len,cb->left);
+  if (cb->buff)
+    free(cb->buff);
   cb->buff = NULL;
   cb->start = 0;
   cb->end = 0;
