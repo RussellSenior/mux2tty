@@ -44,6 +44,14 @@ int max_fds(fd_set *set)
   return max;
 }
 
+int max_fds2(fd_set *set1, fd_set *set2)
+{
+  int max = FD_SETSIZE;
+  while (max > 0 && !FD_ISSET(max-1, set1) && !FD_ISSET(max-1, set2))
+    max--;
+  return max;
+}
+
 int validate_terminal(char*,char*);
 int validate_port(char*);
 
@@ -143,9 +151,10 @@ int main(int argc,char** argv)
   FD_ZERO(&sessions);
   FD_ZERO(&closed);
 
+  int last = 0;
+  int pending = 0;
+
   while (1) {
-    int pending = 0;
-    int last = 0;
 
     if (verbose) {
       printf ("tty: %d ; listening %d\n",term,port);
@@ -192,10 +201,7 @@ int main(int argc,char** argv)
       }
     }
     
-    nfds = max_fds(&readfds);
-    int sfds = max_fds(&sessions);
-    if (sfds > nfds) 
-      nfds = sfds;
+    nfds = max_fds2(&readfds,&sessions);
 
     b = (struct cbuff *) realloc (b,nfds * sizeof(struct cbuff));
 
