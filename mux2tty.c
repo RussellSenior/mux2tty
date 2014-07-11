@@ -36,17 +36,17 @@ int print_usage (char* progname)
 	 ,progname);
 }
 
-int max_fds(fd_set *set) 
+int max_fds(fd_set *set,int start) 
 {
-  int max = FD_SETSIZE;
+  int max = start ? start : FD_SETSIZE;
   while (max > 0 && !FD_ISSET(max-1, set))
     max--;
   return max;
 }
 
-int max_fds2(fd_set *set1, fd_set *set2)
+int max_fds2(fd_set *set1, fd_set *set2, int start)
 {
-  int max = FD_SETSIZE;
+  int max = start ? start : FD_SETSIZE;
   while (max > 0 && !FD_ISSET(max-1, set1) && !FD_ISSET(max-1, set2))
     max--;
   return max;
@@ -146,6 +146,7 @@ int main(int argc,char** argv)
     return -4;
   }
  
+  int maxfd = port + 1;
   fd_set sessions;
   fd_set closed;
   FD_ZERO(&sessions);
@@ -201,7 +202,7 @@ int main(int argc,char** argv)
       }
     }
     
-    nfds = max_fds2(&readfds,&sessions);
+    nfds = max_fds2(&readfds,&sessions,maxfd);
 
     b = (struct cbuff *) realloc (b,nfds * sizeof(struct cbuff));
 
@@ -258,7 +259,10 @@ int main(int argc,char** argv)
 	      printf ("error %d accepting connection on port %d\n",nfd,port);
 	    } else {
 	      FD_SET (nfd, &sessions);
-	      nfds = max_fds(&sessions);
+	      if (nfds >= maxfd) 
+		maxfd = nfds + 1;
+
+	      nfds = max_fds(&sessions,maxfd);
 
 	      b = (struct cbuff *) realloc (b, nfds * sizeof(struct cbuff));
 	      if (!b) {
