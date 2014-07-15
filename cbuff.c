@@ -106,7 +106,18 @@ int cbuf2buf (struct cbuff *cb, char *dest, int n)
   cb->left += n;
   return n;
 }
-  
+
+int buf2cbuf (struct cbuff *cb, char *src, int n)
+{
+  if (cb->left < n)
+    n = cb->left;
+  for (int i=0 ; i<n ; i++) {
+    cb->buff[(cb->end + i) % cb->len] = src[i];
+  }
+  cb->end = (cb->end + n) % cb->len;
+  cb->left -= n;
+  return n;
+}
 	
 int cbuf_find (struct cbuff *cb, char c) 
 {
@@ -115,4 +126,15 @@ int cbuf_find (struct cbuff *cb, char c)
     if (cb->buff[(cb->start + i) % cb->len] == c)
       return i+1;
   return 0;
+}
+
+int cbuf_findtiu (struct cbuff *cb)
+{
+  return cbuf_find (cb, 0x4d);
+}
+
+int cbuf_finduit (struct cbuff *cb)
+{
+  if ((cb->len - cb->left) > 0)
+    return 1;
 }

@@ -3,6 +3,8 @@
 #include <unistd.h>
 #include <getopt.h>
 #include <string.h>
+#include <argp.h>
+#include <errno.h>
 
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -21,20 +23,36 @@
 
 #include "cbuff.h"
 
+const char *argp_program_version = "mux2tty 0.1";
+const char *argp_program_bug_address = "mux2tty-bugs@klickitat.com";
+
+static char doc[] =
+  "mux2tty opens a tty and listens on a TCP port for connections\v\
+Data from TCP connections are sent to the tty.  Data from the tty are sent to all \
+TCP connections.  By default, data are line-buffered and input from connections are \
+is round-robined.  Turn off round-robining using --fifo.  Turn off buffering \
+with --delimiter with no argument.  Buffer on something other than lines using the \
+--delimiter option with a string argument";
+
+
+#define DEFAULT_DEBUG_LEVEL  0xffffffff
+
 int verbose = 0;
+int quiet = 0;
+unsigned long debug = 0;
+int nofork = 0;
+
+#define LINE_BUFFERING  1
+#define TIU_BUFFERING   2
+
+int buffering = LINE_BUFFERING;
+char delim = '\n';
+
+char* termstr = NULL;
+char* baudstr = "57600";
+char* portstr = "4610";
 
 struct termios tp, save;
-
-int print_usage (char* progname)
-{
-  printf("%s usage:\n"
-	 "-h,--help        this message\n"
-	 "-t,--tty <arg>   attach to <arg> tty\n"
-	 "-b,--baud <arg>  communicate with tty at <arg> baud\n"
-	 "-p,--port <arg>  listen for tcp connections on port <arg>\n"
-	 "-v,--verbose     describe what is happening\n"
-	 ,progname);
-}
 
 int max_fds(fd_set *set,int start) 
 {
@@ -55,61 +73,101 @@ int max_fds2(fd_set *set1, fd_set *set2, int start)
 int validate_terminal(char*,char*);
 int validate_port(char*);
 
-int main(int argc,char** argv) 
+
+static int
+parse_opt (int key, char *arg, struct argp_state *state)
+{
+  int *arg_count = state->input;
+  switch (key)
+    {
+    case 'd':
+      if (!arg)
+	debug = DEFAULT_DEBUG_LEVEL;
+      else {
+	errno = 0;
+	debug = strtoul (arg, NULL, 0);
+	if (errno)
+	  argp_usage (state);
+      }
+      break;
+
+    case 'n':
+      nofork = 1;
+      break;
+
+    case 'b':
+      baudstr = arg;
+      break;
+
+    case 'p':
+      portstr = arg;
+      break;
+
+    case 'l':
+      buffering = LINE_BUFFERING;
+      delim = '\n';
+      break;
+
+    case 't':
+      buffering = TIU_BUFFERING;
+      delim = 0x4d;
+      break;
+
+    case 'v':
+      verbose = 1;
+      break;
+
+    case 'q':
+      quiet = 1;
+      break;
+
+    case ARGP_KEY_ARG:
+      (*arg_count)++;
+      switch (*arg_count) {
+      case 1:
+	termstr = arg;
+	break;
+      case 2:
+	baudstr = arg;
+	break;
+      case 3:
+	portstr = arg;
+	break;
+      }
+      break;
+
+    case ARGP_KEY_END:
+      if (*arg_count < 1 || *arg_count > 3)
+	argp_usage (state);
+      break;
+    }
+  return 0;
+}
+
+int main(int argc,char** argv)
 {
   int c;
-  
-  char* baudstr = NULL;
-  char* portstr = NULL;
-  char* termstr = NULL;
-  
-  while (1) 
-    {
-      
-      static struct option long_options[] =
-      {
-	{"help", no_argument, 0, 'h'},
-	{"port", required_argument, 0, 'p'},
-	{"tty", required_argument, 0, 't'},
-	{"baud", required_argument, 0, 'b'},
-	{"verbose", no_argument, 0, 'v'},
-	{ 0,0,0,0 }
-      };
-      
-      int option_index = 0;
-      
-      c = getopt_long (argc, argv, "hb:p:t:v",
-		       long_options, &option_index);
 
-      if (c == -1)
-	break;
+  struct argp_option options[] = {
+    { "debug", 'd', "NUM", OPTION_ARG_OPTIONAL, "Turn on debugging [level]" },
+    { "nofork", 'n', 0, 0, "Don't fork or daemonize" },
+    { 0, 0, 0, 0, "Informational options:", -1 },
+    { "verbose", 'v', 0, 0, "Be more verbose" },
+    { "quiet", 'q', 0, 0, "Be quiet" },
+    { 0, 0, 0, 0, "Connection parameters:", 7},
+    { "baud", 'b', "<baud>", 0, "Baud for tty" },
+    { "port", 'p', "<port>", 0, "Port number to listen on" },
+    { 0, 0, 0, 0, "Buffering options:", 8 },
+    { "line-buffering", 'l', 0, 0, "Line buffering" },
+    { "tiu-buffering", 't', 0, 0, "TIU buffering" },
+    { 0 }
+  };
 
-      switch (c) 
-	{
-	case 'h':
-	  print_usage(argv[0]);
-	  return 0;
+  struct argp argp = { options, parse_opt, "<tty> [<baud> [<port>]]", doc };
 
-	case 't':
-	  termstr = optarg;
-	  break;
-
-	case 'b':
-	  baudstr = optarg;
-	  break;
-
-	case 'p':
-	  portstr = optarg;
-	  break;
-
-	case 'v':
-	  verbose = 1;
-	  break;
-
-	default: 
-	  return -1;
-	}
-    }
+  int arg_count = 0;
+  if (argp_parse (&argp, argc, argv, 0, 0, &arg_count))
+    return -1;
 
   int term = validate_terminal(termstr,baudstr);
 
@@ -130,8 +188,6 @@ int main(int argc,char** argv)
 
   struct cbuff* b = NULL;
   
-#define DELIM '\n'
-
   int len = 0;
   int nfds = 0;
 
@@ -174,7 +230,9 @@ int main(int argc,char** argv)
     for (int fd=0 ; fd<nfds ; fd++) {
       if (FD_ISSET(fd, &sessions)) {
 	printf ("session %d\n",fd);
-	int n = cbuf_find(b+fd,DELIM);
+	int n = (buffering == LINE_BUFFERING) ?
+	  cbuf_find(b+fd,delim) :
+	  cbuf_findtiu(b+fd);
 	if (FD_ISSET (fd, &closed)) {
 	  printf ("session %d is closed, don't read\n",fd);
 	  // session is closed, so don't read
@@ -309,7 +367,9 @@ int main(int argc,char** argv)
 	printf ("tty is writable\n");
 	if (pending) {
 	  printf ("serving pending buffer %d\n",pending);
-	  int n = cbuf_find(b+pending,DELIM);
+	  int n = (buffering == LINE_BUFFERING) ?
+	    cbuf_find (b+pending,delim) :
+	    cbuf_findtiu(b+pending);
 	  int len = cbuf2write(b+pending,term,n);
 	  if (len == n) {
 	    printf ("completed pending buffer %d\n",pending);
@@ -322,7 +382,9 @@ int main(int argc,char** argv)
 	    int fd = (last + i + 1) % nfds;
 	    if (FD_ISSET (fd, &sessions)) {
 	      printf ("looking for delimiter in session %d buffer\n",fd);
-	      int n = cbuf_find (b+fd,DELIM);
+	      int n = (buffering == LINE_BUFFERING) ?
+		cbuf_find (b+fd,delim) :
+		cbuf_findtiu (b+fd);
 	      if (n) {
 		printf("record delimter found at offset %d of buffer %d\n",n,fd);
 		int len = cbuf2write(b+fd,term,n);
@@ -344,7 +406,9 @@ int main(int argc,char** argv)
       }
       // check tty cbuff for records, if ready, send to sessions
       printf ("looking for delimiter in tty %d buffer\n",term);
-      int n = cbuf_find(b+term,DELIM);
+      int n = (buffering == LINE_BUFFERING) ?
+	cbuf_find (b+term,delim) :
+	cbuf_finduit (b+term);
       if (n) {
 	char buf[64];
 	int len = cbuf2buf (b+term,buf,n);

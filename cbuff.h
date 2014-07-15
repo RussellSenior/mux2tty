@@ -12,4 +12,7 @@ int resize_cbuff (struct cbuff *cb, int n);
 int read2cbuf (struct cbuff *cb, int fd);
 int cbuf2write (struct cbuff *cb, int fd, int n);
 int cbuf2buf (struct cbuff *cb, char* buf, int n);
+int buf2cbuf (struct cbuff *cb, char* buf, int n);
 int cbuf_find (struct cbuff *cb, char c);
+int cbuf_findtiu (struct cbuff *cb);
+int cbuf_finduit (struct cbuff *cb);
