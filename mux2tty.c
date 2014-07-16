@@ -48,7 +48,7 @@ int nofork = 0;
 int buffering = LINE_BUFFERING;
 char delim = '\n';
 
-char* termstr = NULL;
+char* ttystr = NULL;
 char* baudstr = "57600";
 char* portstr = "4610";
 
@@ -125,7 +125,7 @@ parse_opt (int key, char *arg, struct argp_state *state)
       (*arg_count)++;
       switch (*arg_count) {
       case 1:
-	termstr = arg;
+	ttystr = arg;
 	break;
       case 2:
 	baudstr = arg;
@@ -169,19 +169,19 @@ int main(int argc,char** argv)
   if (argp_parse (&argp, argc, argv, 0, 0, &arg_count))
     return -1;
 
-  int term = validate_terminal(termstr,baudstr);
+  int tty = validate_terminal(ttystr,baudstr);
 
-  if (term < 0) {
-    printf("opening terminal %s at %s failed with error %d\n",termstr,baudstr,term);
+  if (tty < 0) {
+    printf("opening terminal %s at %s failed with error %d\n",ttystr,baudstr,tty);
     return -2;
   }
 
   int port = validate_port(portstr);
 
   if (verbose) {
-    printf("terminal = %s\n",termstr);
+    printf("terminal = %s\n",ttystr);
     printf("baud = %s\n",baudstr);
-    printf("tty fd = %d\n",term);
+    printf("tty fd = %d\n",tty);
     printf("port = %s\n",portstr);
     printf("port number = %d\n",port);
   }
@@ -191,13 +191,13 @@ int main(int argc,char** argv)
   int len = 0;
   int nfds = 0;
 
-  b = (struct cbuff*) calloc (term + 1, sizeof(struct cbuff));
+  b = (struct cbuff*) calloc (tty + 1, sizeof(struct cbuff));
   if (!b) {
     printf ("failed to allocated cbuff array for tty\n");
     return -3;
   }
 
-  if (new_cbuff(b+term,64) < 0) {
+  if (new_cbuff(b+tty,64) < 0) {
     printf ("failed to allocated cbuff buffer for tty\n");
     return -4;
   }
@@ -214,17 +214,17 @@ int main(int argc,char** argv)
   while (1) {
 
     if (verbose) {
-      printf ("tty: %d ; listening %d\n",term,port);
+      printf ("tty: %d ; listening %d\n",tty,port);
     }
     fd_set readfds,writefds;
     memcpy(&readfds,&sessions,sizeof(fd_set));
     FD_ZERO(&writefds); // clear output
-    FD_SET(term,&readfds); // tty
+    FD_SET(tty,&readfds); // tty
     FD_SET(port,&readfds); // listening for connections
 
     if (pending) {
       printf ("writes to tty pending\n");
-      FD_SET(term,&writefds);
+      FD_SET(tty,&writefds);
     }
 
     for (int fd=0 ; fd<nfds ; fd++) {
@@ -250,7 +250,7 @@ int main(int argc,char** argv)
 	}
 	if (n) {
 	  printf ("session %d has %d bytes to write, checking tty for writability\n",fd,n);
-	  FD_SET(term,&writefds);
+	  FD_SET(tty,&writefds);
 	} else if (b[fd].left == 0) {
 	  printf ("cbuff for session %d does not have a complete record, and is out of space\n",fd);
 	  // no delimiter, buffer full, so double size
@@ -277,9 +277,9 @@ int main(int argc,char** argv)
 	  if (verbose) {
 	    printf ("read fd = %d\n",fd);
 	  }
-	  if (fd == term) {
+	  if (fd == tty) {
 	    // data has arrived on tty, read into buffer
-	    len = read2cbuf(b+term,term);
+	    len = read2cbuf(b+tty,tty);
 	    if (verbose) {
 	      printf ("read %d bytes from tty\n",len);
 	    }
@@ -363,14 +363,14 @@ int main(int argc,char** argv)
 	}
       }
       // try to write
-      if (FD_ISSET (term, &writefds)) {
+      if (FD_ISSET (tty, &writefds)) {
 	printf ("tty is writable\n");
 	if (pending) {
 	  printf ("serving pending buffer %d\n",pending);
 	  int n = (buffering == LINE_BUFFERING) ?
 	    cbuf_find (b+pending,delim) :
 	    cbuf_findtiu(b+pending);
-	  int len = cbuf2write(b+pending,term,n);
+	  int len = cbuf2write(b+pending,tty,n);
 	  if (len == n) {
 	    printf ("completed pending buffer %d\n",pending);
 	    pending = 0;
@@ -387,7 +387,7 @@ int main(int argc,char** argv)
 		cbuf_findtiu (b+fd);
 	      if (n) {
 		printf("record delimter found at offset %d of buffer %d\n",n,fd);
-		int len = cbuf2write(b+fd,term,n);
+		int len = cbuf2write(b+fd,tty,n);
 		printf ("wrote %d bytes to tty from session %d\n",len,fd);
 		if (len > 0 && len < n) {
 		  pending = fd;
@@ -405,13 +405,13 @@ int main(int argc,char** argv)
 	}
       }
       // check tty cbuff for records, if ready, send to sessions
-      printf ("looking for delimiter in tty %d buffer\n",term);
+      printf ("looking for delimiter in tty %d buffer\n",tty);
       int n = (buffering == LINE_BUFFERING) ?
-	cbuf_find (b+term,delim) :
-	cbuf_finduit (b+term);
+	cbuf_find (b+tty,delim) :
+	cbuf_finduit (b+tty);
       if (n) {
 	char buf[64];
-	int len = cbuf2buf (b+term,buf,n);
+	int len = cbuf2buf (b+tty,buf,n);
 	printf ("copied %d of %d chars to buffer\n",len,n);
 	for (int fd=0 ; fd<nfds ; fd++) {
 	  if (FD_ISSET (fd, &sessions)) {
@@ -423,9 +423,9 @@ int main(int argc,char** argv)
 	    }
 	  }
 	}	    
-      } else if (b[term].left == 0) 
+      } else if (b[tty].left == 0)
 	// no delimiter, buffer full, so double size
-	if (resize_cbuff(b+term,b[term].len * 2) < 0)
+	if (resize_cbuff(b+tty,b[tty].len * 2) < 0)
 	  printf ("resize_cbuff tty failed\n");
     }
   }
@@ -435,30 +435,30 @@ int main(int argc,char** argv)
   return 0;
 }
       
-int validate_terminal (char* termstr,char* baudstr)
+int validate_terminal (char* ttystr,char* baudstr)
 {
-  if (!termstr) {
+  if (!ttystr) {
     printf("no tty specified\n");
     return -1;
   }
   
-  printf("tty = %s\n",termstr);
+  printf("tty = %s\n",ttystr);
   
   struct stat ttystat;
   
-  if (stat(termstr, &ttystat) != 0) {
-    printf("stat of tty %s failed\n",termstr);
+  if (stat(ttystr, &ttystat) != 0) {
+    printf("stat of tty %s failed\n",ttystr);
     return -2;
   }
 
   if (S_ISCHR(ttystat.st_mode) == 0) {
-    printf("tty %s isn't a character special device\n",termstr);
+    printf("tty %s isn't a character special device\n",ttystr);
     return -3;
   }
 
-  int fd = open(termstr, O_RDWR|O_NOCTTY|O_NDELAY);
+  int fd = open(ttystr, O_RDWR|O_NOCTTY|O_NDELAY);
   if (fd < 0) {
-    printf("could not open device %s\n",termstr);
+    printf("could not open device %s\n",ttystr);
     return -4;
   }
 
@@ -469,7 +469,7 @@ int validate_terminal (char* termstr,char* baudstr)
 
   if ((tcgetattr(fd, &save) == -1) || // stash away for later restoration
       (tcgetattr(fd, &tp) == -1)) { 
-    printf("failed to read attributes from %s\n",termstr);
+    printf("failed to read attributes from %s\n",ttystr);
     close(fd);
     return -6;
   }
