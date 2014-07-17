@@ -20,6 +20,7 @@
 #include <netdb.h>
 
 #include <time.h>
+#include <syslog.h>
 
 #include "cbuff.h"
 
@@ -44,6 +45,8 @@ int nofork = 0;
 
 #define LINE_BUFFERING  1
 #define TIU_BUFFERING   2
+
+#define CBUFFSIZE      64
 
 int buffering = LINE_BUFFERING;
 char delim = '\n';
@@ -169,39 +172,70 @@ int main(int argc,char** argv)
   if (argp_parse (&argp, argc, argv, 0, 0, &arg_count))
     return -1;
 
-  int tty = validate_terminal(ttystr,baudstr);
+  if (!nofork) {
+    // daemonize
+    switch (fork())
+      {
+      case -1: return -1;
+      case 0: break;
+      default: _exit(EXIT_SUCCESS);
+      }
+
+    if (setsid() == -1)
+      return -1;
+
+    switch (fork())
+      {
+      case -1: return -1;
+      case 0: break;
+      default: _exit(EXIT_SUCCESS);
+      }
+
+    close (STDIN_FILENO);
+    int fd = open("/dev/null", O_RDWR);
+
+    if (fd != STDIN_FILENO)
+      return -1;
+    if (dup2(STDIN_FILENO, STDOUT_FILENO) != STDOUT_FILENO)
+      return -1;
+    if (dup2(STDIN_FILENO, STDERR_FILENO) != STDERR_FILENO)
+      return -1;
+
+    openlog ("mux2tty", LOG_PID, LOG_DAEMON);
+  } else {
+    openlog ("mux2tty", LOG_PID | LOG_PERROR, LOG_DAEMON);
+  }
+
+  int tty = validate_terminal (ttystr, baudstr);
 
   if (tty < 0) {
-    printf("opening terminal %s at %s failed with error %d\n",ttystr,baudstr,tty);
+    syslog (LOG_ERR, "opening terminal %s at %s failed with error %d", ttystr, baudstr, tty);
     return -2;
   }
 
   int port = validate_port(portstr);
 
   if (verbose) {
-    printf("terminal = %s\n",ttystr);
-    printf("baud = %s\n",baudstr);
-    printf("tty fd = %d\n",tty);
-    printf("port = %s\n",portstr);
-    printf("port number = %d\n",port);
+    syslog (LOG_INFO, "terminal = %s ; tty fd = %d ; baud = %s", ttystr, tty, baudstr);
+    syslog (LOG_INFO, "port = %s ; port number = %d",portstr,port);
   }
 
   struct cbuff* b = NULL;
-  
+
   int len = 0;
   int nfds = 0;
 
   b = (struct cbuff*) calloc (tty + 1, sizeof(struct cbuff));
   if (!b) {
-    printf ("failed to allocated cbuff array for tty\n");
+    syslog (LOG_ERR, "failed to allocated cbuff array for tty");
     return -3;
   }
 
-  if (new_cbuff(b+tty,64) < 0) {
-    printf ("failed to allocated cbuff buffer for tty\n");
+  if (new_cbuff(b+tty,CBUFFSIZE) < 0) {
+    syslog (LOG_ERR, "failed to allocated cbuff buffer for tty");
     return -4;
   }
- 
+
   int maxfd = port + 1;
   fd_set sessions;
   fd_set closed;
@@ -214,7 +248,7 @@ int main(int argc,char** argv)
   while (1) {
 
     if (verbose) {
-      printf ("tty: %d ; listening %d\n",tty,port);
+      syslog (LOG_INFO, "tty: %d ; listening %d",tty,port);
     }
     fd_set readfds,writefds;
     memcpy(&readfds,&sessions,sizeof(fd_set));
@@ -223,43 +257,43 @@ int main(int argc,char** argv)
     FD_SET(port,&readfds); // listening for connections
 
     if (pending) {
-      printf ("writes to tty pending\n");
+      syslog (LOG_DEBUG, "writes to tty pending");
       FD_SET(tty,&writefds);
     }
 
     for (int fd=0 ; fd<nfds ; fd++) {
       if (FD_ISSET(fd, &sessions)) {
-	printf ("session %d\n",fd);
+	syslog (LOG_DEBUG, "session %d",fd);
 	int n = (buffering == LINE_BUFFERING) ?
 	  cbuf_find(b+fd,delim) :
 	  cbuf_findtiu(b+fd);
 	if (FD_ISSET (fd, &closed)) {
-	  printf ("session %d is closed, don't read\n",fd);
+	  syslog (LOG_DEBUG, "session %d is closed, don't read",fd);
 	  // session is closed, so don't read
 	  FD_CLR(fd,&readfds);
 	  if (!n) {
 	    // closed session has no more complete records
 	    // and won't be getting any new ones, so release
 	    // and remove from future consideration
-	    printf ("no complete records in closed session %d\n",fd);
+	    syslog (LOG_DEBUG, "no complete records in closed session %d",fd);
 	    free_cbuff(b+fd);
 	    FD_CLR(fd,&sessions);
 	    FD_CLR(fd,&closed);
-	    printf ("freeing cbuff and removing %d from sessions and closed lists\n",fd);
+	    syslog (LOG_DEBUG, "freeing cbuff and removing %d from sessions and closed lists",fd);
 	  }
 	}
 	if (n) {
-	  printf ("session %d has %d bytes to write, checking tty for writability\n",fd,n);
+	  syslog (LOG_DEBUG, "session %d has %d bytes to write, checking tty for writability",fd,n);
 	  FD_SET(tty,&writefds);
 	} else if (b[fd].left == 0) {
-	  printf ("cbuff for session %d does not have a complete record, and is out of space\n",fd);
+	  syslog (LOG_DEBUG, "cbuff for session %d does not have a complete record, and is out of space",fd);
 	  // no delimiter, buffer full, so double size
 	  if (resize_cbuff(b+fd,b[fd].len * 2) < 0)
-	    printf ("resize_cbuff session %d failed\n",fd);
+	    syslog (LOG_DEBUG, "resize_cbuff session %d failed",fd);
 	}
       }
     }
-    
+
     nfds = max_fds2(&readfds,&sessions,maxfd);
 
     b = (struct cbuff *) realloc (b,nfds * sizeof(struct cbuff));
@@ -267,37 +301,37 @@ int main(int argc,char** argv)
     int ready = select(nfds,&readfds,&writefds,NULL,NULL);
 
     if (verbose) 
-      printf ("%d fd ready\n",ready);
+      syslog (LOG_DEBUG, "%d fd ready",ready);
 
     if (ready <= 0) {
-      printf ("nothing readable yet, select returned %d\n",ready);
+      syslog (LOG_DEBUG, "nothing readable yet, select returned %d",ready);
     } else {
       for (int fd = 0 ; fd < nfds ; fd++) {
 	if (FD_ISSET (fd, &readfds)) {    
 	  if (verbose) {
-	    printf ("read fd = %d\n",fd);
+	    syslog (LOG_DEBUG, "read fd = %d",fd);
 	  }
 	  if (fd == tty) {
 	    // data has arrived on tty, read into buffer
 	    len = read2cbuf(b+tty,tty);
 	    if (verbose) {
-	      printf ("read %d bytes from tty\n",len);
+	      syslog (LOG_DEBUG, "read %d bytes from tty",len);
 	    }
 	    if (len < 0) {
 	      // error reading tty
-	      printf ("error reading tty\n");
+	      syslog (LOG_DEBUG, "error reading tty");
 	    } else if (len == 0) {
 	      // tty has closed, exit
 	      for (int i=0 ; i<nfds ; i++) {
 		if (FD_ISSET (i, &sessions) && !FD_ISSET (i, &closed)) {
 		  close(i);
-		  printf ("closed session %d\n",i);
+		  syslog (LOG_DEBUG, "closed session %d",i);
 		  FD_SET (i, &closed);
 		}
 	      }
 	      close(port);
 	      if (verbose)
-		printf ("tty closed, exiting\n");
+		syslog (LOG_DEBUG, "tty closed, exiting");
 	      return 0;
 	    } 
 	  } else if (fd == port) {
@@ -308,13 +342,13 @@ int main(int argc,char** argv)
 	    char service[NI_MAXSERV];
 
 	    if (verbose) {
-	      printf ("accepting connection on port %d\n",port);
+	      syslog (LOG_INFO, "accepting connection on port %d",port);
 	    }
 
 	    int nfd = accept (port, (struct sockaddr *) &naddr, &addrlen);
 
 	    if (nfd < 0) {
-	      printf ("error %d accepting connection on port %d\n",nfd,port);
+	      syslog (LOG_ERR, "error %d accepting connection on port %d",nfd,port);
 	    } else {
 	      FD_SET (nfd, &sessions);
 	      if (nfds >= maxfd) 
@@ -324,12 +358,12 @@ int main(int argc,char** argv)
 
 	      b = (struct cbuff *) realloc (b, nfds * sizeof(struct cbuff));
 	      if (!b) {
-		printf("failure to allocate cbuff array for %d\n",nfd);
+		syslog (LOG_ERR, "failure to allocate cbuff array for %d",nfd);
 		return -5;
 	      }
 
-	      if (new_cbuff(b+nfd,64) < 0) {
-		printf ("failed to allocated cbuff buffer for %d\n",nfd);
+	      if (new_cbuff(b+nfd,CBUFFSIZE) < 0) {
+		syslog (LOG_ERR, "failed to allocated cbuff buffer for %d",nfd);
 		return -6;
 	      }
 
@@ -337,26 +371,26 @@ int main(int argc,char** argv)
 			      hostname,NI_MAXHOST,
 			      service,NI_MAXSERV,
 			      NI_NUMERICHOST | NI_NUMERICSERV) != 0) {
-		printf ("getnameinfo failed\n");
+		syslog (LOG_ERR, "getnameinfo failed");
 	      } else {
-		printf ("connection %d from %s:%s\n",nfd,hostname,service);
+		syslog (LOG_INFO, "connection %d from %s:%s",nfd,hostname,service);
 	      }
 	    }
 	  } else {
 	    // received data from a session
 	    len = read2cbuf (b+fd,fd);
 	    if (verbose) {
-	      printf ("read %d bytes from session %d\n",len,fd);
+	      syslog (LOG_DEBUG, "read %d bytes from session %d",len,fd);
 	    }
 	    if (len < 0) {
 	      // error reading session
-	      printf ("error reading fd %d\n",fd);
+	      syslog (LOG_ERR, "error reading fd %d",fd);
 	    } else if (len == 0) {
 	      // session closed
-	      printf ("closing session %d\n",fd);
-	      printf ("session %d cbuff contains %d bytes\n",fd,b[fd].len - b[fd].left);
+	      syslog (LOG_DEBUG, "closing session %d cbuff contains %d bytes",
+		      fd, b[fd].len - b[fd].left);
 	      close(fd);
-	      printf ("marking session %d closed\n",fd);
+	      syslog (LOG_DEBUG, "marking session %d closed",fd);
 	      FD_SET (fd, &closed);
 	    } 
 	  }
@@ -364,69 +398,69 @@ int main(int argc,char** argv)
       }
       // try to write
       if (FD_ISSET (tty, &writefds)) {
-	printf ("tty is writable\n");
+	syslog (LOG_DEBUG, "tty is writable");
 	if (pending) {
-	  printf ("serving pending buffer %d\n",pending);
+	  syslog (LOG_DEBUG, "serving pending buffer %d",pending);
 	  int n = (buffering == LINE_BUFFERING) ?
 	    cbuf_find (b+pending,delim) :
 	    cbuf_findtiu(b+pending);
 	  int len = cbuf2write(b+pending,tty,n);
 	  if (len == n) {
-	    printf ("completed pending buffer %d\n",pending);
+	    syslog (LOG_DEBUG, "completed pending buffer %d",pending);
 	    pending = 0;
 	  }
 	}
-	printf ("pending = %d\n",pending);
+	syslog (LOG_DEBUG, "pending = %d",pending);
 	if (!pending) {
 	  for (int i=0 ; i<nfds ; i++) {
 	    int fd = (last + i + 1) % nfds;
 	    if (FD_ISSET (fd, &sessions)) {
-	      printf ("looking for delimiter in session %d buffer\n",fd);
+	      syslog (LOG_DEBUG, "looking for delimiter in session %d buffer",fd);
 	      int n = (buffering == LINE_BUFFERING) ?
 		cbuf_find (b+fd,delim) :
 		cbuf_findtiu (b+fd);
 	      if (n) {
-		printf("record delimter found at offset %d of buffer %d\n",n,fd);
+		syslog (LOG_DEBUG, "record delimter found at offset %d of buffer %d",n,fd);
 		int len = cbuf2write(b+fd,tty,n);
-		printf ("wrote %d bytes to tty from session %d\n",len,fd);
+		syslog (LOG_DEBUG, "wrote %d bytes to tty from session %d",len,fd);
 		if (len > 0 && len < n) {
 		  pending = fd;
 		} 
 		last = fd;
-		printf ("last session %d\n",last);
+		syslog (LOG_DEBUG, "last session %d",last);
 	      } else if (b[fd].left == 0) {
 		// no delimiter, buffer full, so double size
-		printf ("resizing buffer for session %d\n",fd);
+		syslog (LOG_DEBUG, "resizing buffer for session %d",fd);
 		if (resize_cbuff(b+fd,b[fd].len * 2) < 0)
-		  printf ("resize_cbuff session %d failed\n",fd);
+		  syslog (LOG_DEBUG, "resize_cbuff session %d failed",fd);
 	      }
 	    }
 	  }
 	}
       }
       // check tty cbuff for records, if ready, send to sessions
-      printf ("looking for delimiter in tty %d buffer\n",tty);
+      syslog (LOG_DEBUG, "looking for delimiter in tty %d buffer",tty);
       int n = (buffering == LINE_BUFFERING) ?
 	cbuf_find (b+tty,delim) :
 	cbuf_finduit (b+tty);
       if (n) {
-	char buf[64];
+	char buf[CBUFFSIZE];
 	int len = cbuf2buf (b+tty,buf,n);
-	printf ("copied %d of %d chars to buffer\n",len,n);
+	syslog (LOG_DEBUG, "copied %d of %d chars to buffer",len,n);
 	for (int fd=0 ; fd<nfds ; fd++) {
 	  if (FD_ISSET (fd, &sessions)) {
 	    len = write(fd,buf,n);
 	    if (len < n) {
-	      printf ("partial write (%d of %d bytes) to session %d\n",len,n,fd);
+	      syslog (LOG_DEBUG, "partial write (%d of %d bytes) to session %d",len,n,fd);
 	    } else {
-	      printf ("wrote %d bytes to session %d\n",len,fd);
+	      syslog (LOG_DEBUG, "wrote %d bytes to session %d",len,fd);
 	    }
 	  }
 	}	    
       } else if (b[tty].left == 0)
 	// no delimiter, buffer full, so double size
 	if (resize_cbuff(b+tty,b[tty].len * 2) < 0)
-	  printf ("resize_cbuff tty failed\n");
+	  syslog (LOG_DEBUG, "resize_cbuff tty failed");
     }
   }
 
@@ -438,49 +472,49 @@ int main(int argc,char** argv)
 int validate_terminal (char* ttystr,char* baudstr)
 {
   if (!ttystr) {
-    printf("no tty specified\n");
+    syslog (LOG_ERR, "no tty specified");
     return -1;
   }
   
-  printf("tty = %s\n",ttystr);
+  syslog (LOG_DEBUG, "tty = %s",ttystr);
   
   struct stat ttystat;
   
   if (stat(ttystr, &ttystat) != 0) {
-    printf("stat of tty %s failed\n",ttystr);
+    syslog (LOG_ERR, "stat of tty %s failed",ttystr);
     return -2;
   }
 
   if (S_ISCHR(ttystat.st_mode) == 0) {
-    printf("tty %s isn't a character special device\n",ttystr);
+    syslog (LOG_ERR, "tty %s isn't a character special device",ttystr);
     return -3;
   }
 
   int fd = open(ttystr, O_RDWR|O_NOCTTY|O_NDELAY);
   if (fd < 0) {
-    printf("could not open device %s\n",ttystr);
+    syslog (LOG_ERR, "could not open device %s",ttystr);
     return -4;
   }
 
   if (!isatty(fd)) {
-    printf ("fd %d is not a tty\n",fd);
+    syslog (LOG_ERR, "fd %d is not a tty",fd);
     return -5;
   }
 
   if ((tcgetattr(fd, &save) == -1) || // stash away for later restoration
       (tcgetattr(fd, &tp) == -1)) { 
-    printf("failed to read attributes from %s\n",ttystr);
+    syslog (LOG_ERR, "failed to read attributes from %s",ttystr);
     close(fd);
     return -6;
   }
 
   if (!baudstr) {
-    printf("no baud rate specified\n");
+    syslog (LOG_ERR, "no baud rate specified");
     close(fd);
     return -7;
   }
 
-  printf("baud string = %s\n",baudstr);
+  syslog (LOG_DEBUG, "baud string = %s",baudstr);
 
   int baud=atoi(baudstr);
   speed_t rate;
@@ -518,14 +552,14 @@ int validate_terminal (char* ttystr,char* baudstr)
   case 3500000: rate = B3500000; break;
   case 4000000: rate = B4000000; break;
   default:
-    printf("invalid baud rate %s\n",baudstr);
+    syslog (LOG_ERR, "invalid baud rate %s",baudstr);
     close(fd);
     return -8;
   }
 
   if((cfsetispeed(&tp,rate) == -1) || 
      (cfsetospeed(&tp,rate) == -1)) {
-    printf("failed to set tty speed to %d\n", baud);
+    syslog (LOG_ERR, "failed to set tty speed to %d", baud);
     close(fd);
     return -9;
   }
@@ -543,14 +577,14 @@ int restore_tty(int fd)
 int validate_port (char* portstr) 
 {
   if (!portstr) {
-    printf("port string %s empty\n",portstr);
+    syslog (LOG_ERR, "port string %s empty",portstr);
     return -1;
   }
 
   int port = atoi (portstr);
 
   if (port <= 0) {
-    printf("port string %s is not an valid port number %d\n", portstr, port);
+    syslog (LOG_ERR, "port string %s is not an valid port number %d", portstr, port);
     return -2;
   }
 
@@ -566,7 +600,7 @@ int validate_port (char* portstr)
   hints.ai_flags = AI_PASSIVE | AI_NUMERICSERV;
   
   if (getaddrinfo(NULL, portstr, &hints, &result) != 0) {
-    printf ("getaddrinfo failed\n");
+    syslog (LOG_ERR, "getaddrinfo failed");
     return -3;
   }
   
@@ -578,7 +612,7 @@ int validate_port (char* portstr)
       continue;
 
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) == -1) {
-      printf ("setsockopt failed\n");
+      syslog (LOG_ERR, "setsockopt failed");
       return -4;
     }
 
@@ -591,14 +625,14 @@ int validate_port (char* portstr)
   }
 
   if (rp == NULL) {
-    printf ("bind failed on all addresses\n");
+    syslog (LOG_ERR, "bind failed on all addresses");
     return -5;
   }
 
 #define QUEUE_LEN 50
 
   if (listen (fd, QUEUE_LEN) == -1) {
-    printf ("listen failed\n");
+    syslog (LOG_ERR, "listen failed");
     return -6;
   }
 
