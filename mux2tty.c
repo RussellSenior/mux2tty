@@ -21,6 +21,7 @@
 
 #include <time.h>
 #include <syslog.h>
+#include <libgen.h>
 
 #include "cbuff.h"
 
@@ -211,6 +212,28 @@ int main(int argc,char** argv)
   if (tty < 0) {
     syslog (LOG_ERR, "opening terminal %s at %s failed with error %d", ttystr, baudstr, tty);
     return -2;
+  }
+
+  if (!nofork) {
+    int len;
+    char buf[64];
+
+    len = snprintf(buf,64,"/tmp/mux2tty.%s.pid",basename(ttystr));
+
+    int fd = open (buf, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    if (fd < 0) {
+      syslog (LOG_ERR, "%m can't open pid file: %s", buf);
+      return -3;
+    }
+
+    len = snprintf (buf, 64, "%d", getpid());
+
+    if (write (fd, buf, len) != len) {
+      syslog (LOG_ERR, "writing pid %s failed", buf);
+      return -4;
+    }
+
+    close(fd);
   }
 
   int port = validate_port(portstr);
