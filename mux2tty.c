@@ -22,6 +22,7 @@
 #include <time.h>
 #include <syslog.h>
 #include <libgen.h>
+#include <signal.h>
 
 #include "cbuff.h"
 
@@ -43,6 +44,8 @@ int verbose = 0;
 int quiet = 0;
 unsigned long debug = 0;
 int nofork = 0;
+
+char *fname = NULL;
 
 #define LINE_BUFFERING  1
 #define TIU_BUFFERING   2
@@ -148,6 +151,23 @@ parse_opt (int key, char *arg, struct argp_state *state)
   return 0;
 }
 
+static void
+term_handler(int sig)
+{
+  syslog (LOG_INFO, "captured sigint, exiting");
+  exit(0);
+}
+
+static void 
+remove_pid_file_on_exit(int status, void *arg)
+{
+  if (fname) {
+    syslog (LOG_INFO, "removing pid file %s",fname);
+    unlink (fname);
+  }
+  return;
+}
+
 int main(int argc,char** argv)
 {
   int c;
@@ -168,6 +188,8 @@ int main(int argc,char** argv)
   };
 
   struct argp argp = { options, parse_opt, "<tty> [<baud> [<port>]]", doc };
+
+  struct sigaction sa;
 
   int arg_count = 0;
   if (argp_parse (&argp, argc, argv, 0, 0, &arg_count))
@@ -220,6 +242,8 @@ int main(int argc,char** argv)
 
     len = snprintf(buf,64,"/tmp/mux2tty.%s.pid",basename(ttystr));
 
+    fname = strndup(buf,64);
+
     int fd = open (buf, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
     if (fd < 0) {
       syslog (LOG_ERR, "%m can't open pid file: %s", buf);
@@ -231,6 +255,16 @@ int main(int argc,char** argv)
     if (write (fd, buf, len) != len) {
       syslog (LOG_ERR, "writing pid %s failed", buf);
       return -4;
+    }
+
+    on_exit(&remove_pid_file_on_exit,fname);
+
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sa.sa_handler = term_handler;
+    if (sigaction(SIGTERM, &sa, NULL) == -1) {
+      syslog (LOG_ERR, "sigaction failure");
+      return -5;
     }
 
     close(fd);
