@@ -1,0 +1,8 @@
+mux2tty opens a tty and listens on a TCP port for connections
+
+Data from TCP connections are sent to the tty.  Data from the tty are
+sent to all TCP connections.  By default, data are line-buffered and
+input from connections are is round-robined.  Turn off round-robining
+using --fifo.  Turn off buffering with --delimiter with no argument.
+Buffer on something other than lines using the --delimiter option with
+a string argument
