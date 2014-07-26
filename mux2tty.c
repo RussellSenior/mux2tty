@@ -45,8 +45,6 @@ int quiet = 0;
 unsigned long debug = 0;
 int nofork = 0;
 
-char *fname = NULL;
-
 #define LINE_BUFFERING  1
 #define TIU_BUFFERING   2
 
@@ -161,9 +159,10 @@ term_handler(int sig)
 static void 
 remove_pid_file_on_exit(int status, void *arg)
 {
-  if (fname) {
-    syslog (LOG_INFO, "removing pid file %s",fname);
-    unlink (fname);
+  char *pidfn = (char *) arg;
+  if (pidfn) {
+    syslog (LOG_INFO, "removing pid file %s",pidfn);
+    unlink (pidfn);
   }
   return;
 }
@@ -239,10 +238,11 @@ int main(int argc,char** argv)
   if (!nofork) {
     int len;
     char buf[64];
+    char *pidfn = NULL;
 
-    len = snprintf(buf,64,"/tmp/mux2tty.%s.pid",basename(ttystr));
+    len = snprintf(buf,64,"/var/run/mux2tty.%s.pid",basename(ttystr));
 
-    fname = strndup(buf,64);
+    pidfn = strndup(buf,64);
 
     int fd = open (buf, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
     if (fd < 0) {
@@ -257,7 +257,7 @@ int main(int argc,char** argv)
       return -4;
     }
 
-    on_exit(&remove_pid_file_on_exit,fname);
+    on_exit(&remove_pid_file_on_exit,pidfn);
 
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
