@@ -412,8 +412,8 @@ int main(int argc,char** argv)
 	      syslog (LOG_ERR, "error %d accepting connection on port %d",nfd,port);
 	    } else {
 	      FD_SET (nfd, &sessions);
-	      if (nfds >= maxfd) 
-		maxfd = nfds + 1;
+	      if (nfd >= maxfd) 
+		maxfd = nfd + 1;
 
 	      nfds = max_fds(&sessions,maxfd);
 
