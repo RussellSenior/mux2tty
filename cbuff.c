@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <syslog.h>
+#include <ctype.h>
 
 #include "cbuff.h"
 
@@ -63,6 +64,22 @@ int resize_cbuff (struct cbuff *cb, int n) {
   return 0;
 }
 
+int dump_cbuf(struct cbuff *cb, int count) 
+{
+  fprintf(stderr, "[");
+  for (int i = 0 ; i < count ; i++)
+    fprintf(stderr, " %02x", cb->buff[(cb->start + i) % cb->len]);
+  fprintf(stderr,"]\n[");
+  for (int i = 0 ; i < count ; i++) {
+    char c = cb->buff[(cb->start + i) % cb->len];
+    if (isprint(c)) 
+      fprintf(stderr, "  %c",c);
+    else
+      fprintf(stderr, "   ");
+  }
+  fprintf(stderr, "]\n");
+}
+
 int read2cbuf (struct cbuff *cb, int fd) 
 {
   // note that to simplify implementation, this function only fills buffer to the
@@ -84,6 +101,7 @@ int read2cbuf (struct cbuff *cb, int fd)
     if (cb->end == cb->len)
       cb->end = 0;
   }
+  dump_cbuf(cb,count);
   syslog (LOG_DEBUG, "after read, start = %d ; end = %d ; len = %d ; left = %d", cb->start, cb->end, cb->len, cb->left);
   syslog (LOG_DEBUG, "%d bytes read", count);
   return count;
@@ -98,7 +116,7 @@ int cbuf2write (struct cbuff *cb, int fd, int n)
     syslog (LOG_ERR, "buffer of %d bytes is empty", cb->len);
     return -1;
   }
-  
+
   int m = n;
   // keep writing until writes don't write, then return bytes written
   // caller must deal with partial write.
@@ -108,6 +126,7 @@ int cbuf2write (struct cbuff *cb, int fd, int n)
       cb->end - cb->start;
     syslog (LOG_DEBUG, "before write, start = %d ; end = %d ; len = %d ; left = %d", cb->start, cb->end, cb->len, cb->left);
     int count = write (fd, cb->buff + cb->start, (m < o) ? m : o);
+    dump_cbuf(cb,count);
     if (count > 0) {
       m -= count;
       cb->start += count;
@@ -154,14 +173,17 @@ int buf2cbuf (struct cbuff *cb, char *src, int n)
 	
 int cbuf_find (struct cbuff *cb, char c) 
 {
-  syslog (LOG_DEBUG, "cbuf_find: looking in buffer for \'%c\'", c);
+  if (isprint (c))
+    syslog (LOG_DEBUG, "cbuf_find: looking in buffer for \'%c\' 0x%x", c,c);
+  else
+    syslog (LOG_DEBUG, "cbuf_find: looking in buffer for 0x%x", c);
   int csize = cb->len - cb->left;
   for (int i=0 ; i<csize ; i++)
     if (cb->buff[(cb->start + i) % cb->len] == c) {
-      syslog (LOG_DEBUG, "found \'%c\' %d bytes from start index", c, i+1);
+      syslog (LOG_DEBUG, "found delimiter %d bytes from start index", i+1);
       return i+1;
     }
-  syslog (LOG_DEBUG, "did not find \'%c\' in buffer", c);
+  syslog (LOG_DEBUG, "did not find delimiter in buffer");
   return 0;
 }
 

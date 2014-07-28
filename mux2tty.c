@@ -272,6 +272,10 @@ int main(int argc,char** argv)
 
   int port = validate_port(portstr);
 
+  if (port < 0) {
+    return -6;
+  }
+
   if (verbose) {
     syslog (LOG_INFO, "terminal = %s ; tty fd = %d ; baud = %s", ttystr, tty, baudstr);
     syslog (LOG_INFO, "port = %s ; port number = %d",portstr,port);
@@ -285,12 +289,12 @@ int main(int argc,char** argv)
   b = (struct cbuff*) calloc (tty + 1, sizeof(struct cbuff));
   if (!b) {
     syslog (LOG_ERR, "failed to allocated cbuff array for tty");
-    return -3;
+    return -7;
   }
 
   if (new_cbuff(b+tty,CBUFFSIZE) < 0) {
     syslog (LOG_ERR, "failed to allocated cbuff buffer for tty");
-    return -4;
+    return -8;
   }
 
   int maxfd = port + 1;
@@ -619,6 +623,17 @@ int validate_terminal (char* ttystr,char* baudstr)
     syslog (LOG_ERR, "failed to set tty speed to %d", baud);
     close(fd);
     return -9;
+  }
+
+  tp.c_lflag &= ~(ICANON | ISIG | IEXTEN | ECHO);
+  tp.c_iflag &= ~(BRKINT | ICRNL | IGNBRK | IGNCR | INLCR | INPCK | ISTRIP | IXON | PARMRK);
+  tp.c_oflag &= ~OPOST;
+  tp.c_cc[VMIN] = 1;
+  tp.c_cc[VTIME] = 0;
+
+  if (tcsetattr(fd, TCSAFLUSH, &tp) == -1) {
+    syslog (LOG_ERR, "failed to set raw mode");
+    return -10;
   }
 
   return fd;
