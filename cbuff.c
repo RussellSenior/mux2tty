@@ -64,13 +64,13 @@ int resize_cbuff (struct cbuff *cb, int n) {
   return 0;
 }
 
-int dump_cbuf(struct cbuff *cb, int count) 
+int dump_cbuf(struct cbuff *cb) 
 {
   fprintf(stderr, "[");
-  for (int i = 0 ; i < count ; i++)
+  for (int i = 0 ; i < cb->len - cb->left ; i++)
     fprintf(stderr, " %02x", cb->buff[(cb->start + i) % cb->len]);
   fprintf(stderr,"]\n[");
-  for (int i = 0 ; i < count ; i++) {
+  for (int i = 0 ; i < cb->len - cb->left ; i++) {
     char c = cb->buff[(cb->start + i) % cb->len];
     if (isprint(c)) 
       fprintf(stderr, "  %c",c);
@@ -93,6 +93,7 @@ int read2cbuf (struct cbuff *cb, int fd)
   }
 
   syslog (LOG_DEBUG, "before read, start = %d ; end = %d ; len = %d ; left = %d", cb->start, cb->end, cb->len, cb->left);
+  dump_cbuf(cb);
   int count = read (fd, cb->buff + cb->end, 
 		    ((cb->end < cb->start) ? cb->start : cb->len) - cb->end);
   if (count > 0) {
@@ -101,8 +102,8 @@ int read2cbuf (struct cbuff *cb, int fd)
     if (cb->end == cb->len)
       cb->end = 0;
   }
-  dump_cbuf(cb,count);
   syslog (LOG_DEBUG, "after read, start = %d ; end = %d ; len = %d ; left = %d", cb->start, cb->end, cb->len, cb->left);
+  dump_cbuf(cb);
   syslog (LOG_DEBUG, "%d bytes read", count);
   return count;
 }
@@ -125,8 +126,8 @@ int cbuf2write (struct cbuff *cb, int fd, int n)
       cb->len - cb->start :
       cb->end - cb->start;
     syslog (LOG_DEBUG, "before write, start = %d ; end = %d ; len = %d ; left = %d", cb->start, cb->end, cb->len, cb->left);
+    dump_cbuf(cb);
     int count = write (fd, cb->buff + cb->start, (m < o) ? m : o);
-    dump_cbuf(cb,count);
     if (count > 0) {
       m -= count;
       cb->start += count;
@@ -134,6 +135,7 @@ int cbuf2write (struct cbuff *cb, int fd, int n)
       if (cb->start == cb->len)
 	cb->start = 0;
       syslog (LOG_DEBUG, "after write, start = %d ; end = %d ; len = %d ; left = %d", cb->start, cb->end, cb->len, cb->left);
+      dump_cbuf(cb);
     } else {
       syslog (LOG_DEBUG, "write returned 0 bytes, returning %d total bytes written", n-m);
       return n - m;
@@ -147,12 +149,14 @@ int cbuf2buf (struct cbuff *cb, char *dest, int n)
 {
   syslog (LOG_DEBUG, "cbuf2buf: reading %d bytes from buffer into a scratch buffer", n);
   syslog (LOG_DEBUG, "before copy, start = %d ; end = %d ; len = %d ; left = %d", cb->start, cb->end, cb->len, cb->left);
+  dump_cbuf(cb);
   for (int i=0 ; i<n ; i++) {
     dest[i] = cb->buff[(cb->start + i) % cb->len];
   }
   cb->start = (cb->start + n) % cb->len;
   cb->left += n;
   syslog (LOG_DEBUG, "after copy, start = %d ; end = %d ; len = %d ; left = %d", cb->start, cb->end, cb->len, cb->left);
+  dump_cbuf(cb);
   return n;
 }
 
@@ -160,6 +164,7 @@ int buf2cbuf (struct cbuff *cb, char *src, int n)
 {
   syslog (LOG_DEBUG, "buf2cbuf: reading %d bytes from scratch buffer into buffer", n);
   syslog (LOG_DEBUG, "before copy, start = %d ; end = %d ; len = %d ; left = %d", cb->start, cb->end, cb->len, cb->left);
+  dump_cbuf(cb);
   if (cb->left < n)
     n = cb->left;
   for (int i=0 ; i<n ; i++) {
@@ -168,6 +173,7 @@ int buf2cbuf (struct cbuff *cb, char *src, int n)
   cb->end = (cb->end + n) % cb->len;
   cb->left -= n;
   syslog (LOG_DEBUG, "after copy, start = %d ; end = %d ; len = %d ; left = %d", cb->start, cb->end, cb->len, cb->left);
+  dump_cbuf(cb);
   return n;
 }
 	
