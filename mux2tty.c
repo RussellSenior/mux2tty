@@ -44,6 +44,7 @@ int verbose = 0;
 int quiet = 0;
 unsigned long debug = 0;
 int nofork = 0;
+int hardware_flowctrl = 0;
 
 #define LINE_BUFFERING  1
 #define TIU_BUFFERING   2
@@ -52,6 +53,8 @@ int nofork = 0;
 
 int buffering = LINE_BUFFERING;
 char delim = '\n';
+
+int tty = 0;
 
 char* ttystr = NULL;
 char* baudstr = "57600";
@@ -77,7 +80,7 @@ int max_fds2(fd_set *set1, fd_set *set2, int start)
 
 int validate_terminal(char*,char*);
 int validate_port(char*);
-
+int restore_tty(int fd);
 
 static int
 parse_opt (int key, char *arg, struct argp_state *state)
@@ -106,6 +109,10 @@ parse_opt (int key, char *arg, struct argp_state *state)
 
     case 'p':
       portstr = arg;
+      break;
+
+    case 'f':
+      hardware_flowctrl = 1;
       break;
 
     case 'l':
@@ -153,6 +160,7 @@ static void
 term_handler(int sig)
 {
   syslog (LOG_INFO, "captured sigint, exiting");
+  restore_tty(tty);
   exit(0);
 }
 
@@ -179,6 +187,7 @@ int main(int argc,char** argv)
     { "quiet", 'q', 0, 0, "Be quiet" },
     { 0, 0, 0, 0, "Connection parameters:", 7},
     { "baud", 'b', "<baud>", 0, "Baud for tty" },
+    { "flowctrl", 'f', 0, 0, "Enable hardware flow control" },
     { "port", 'p', "<port>", 0, "Port number to listen on" },
     { 0, 0, 0, 0, "Buffering options:", 8 },
     { "line-buffering", 'l', 0, 0, "Line buffering" },
@@ -228,7 +237,7 @@ int main(int argc,char** argv)
     openlog ("mux2tty", LOG_PID | LOG_PERROR, LOG_DAEMON);
   }
 
-  int tty = validate_terminal (ttystr, baudstr);
+  tty = validate_terminal (ttystr, baudstr);
 
   if (tty < 0) {
     syslog (LOG_ERR, "opening terminal %s at %s failed with error %d", ttystr, baudstr, tty);
@@ -628,6 +637,10 @@ int validate_terminal (char* ttystr,char* baudstr)
   tp.c_lflag &= ~(ICANON | ISIG | IEXTEN | ECHO);
   tp.c_iflag &= ~(BRKINT | ICRNL | IGNBRK | IGNCR | INLCR | INPCK | ISTRIP | IXON | PARMRK);
   tp.c_oflag &= ~OPOST;
+  if (hardware_flowctrl) 
+    tp.c_cflag |= CRTSCTS; // enable hardware flow control
+  tp.c_cflag &= ~(CSTOPB | PARENB | CSIZE); // clear 2-stop-bits, parity, and character size mask
+  tp.c_cflag |= CS8; // set 8-bit characters
   tp.c_cc[VMIN] = 1;
   tp.c_cc[VTIME] = 0;
 
