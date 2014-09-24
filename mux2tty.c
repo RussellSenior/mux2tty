@@ -513,9 +513,11 @@ int main(int argc,char** argv)
       int n = (buffering == LINE_BUFFERING) ?
 	cbuf_find (b+tty,delim) :
 	cbuf_finduit (b+tty);
+      // hack to avoid waiting for a delimiter from tty
+      n = (b+tty)->len - (b+tty)->left;
       if (n) {
 	char buf[CBUFFSIZE];
-	int len = cbuf2buf (b+tty,buf,n);
+	int len = cbuf2buf (b+tty,buf,n>CBUFFSIZE ? CBUFFSIZE : n);
 	syslog (LOG_DEBUG, "copied %d of %d chars to buffer",len,n);
 	for (int fd=0 ; fd<nfds ; fd++) {
 	  if (FD_ISSET (fd, &sessions)) {
