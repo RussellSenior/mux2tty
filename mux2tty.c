@@ -358,7 +358,7 @@ int main(int argc,char** argv)
 	} else if (b[fd].left == 0) {
 	  syslog (LOG_DEBUG, "cbuff for session %d does not have a complete record, and is out of space",fd);
 	  // no delimiter, buffer full, so double size
-	  if (resize_cbuff(b+fd,b[fd].len * 2) < 0)
+	  if (resize_cbuff(b+fd,b[fd].len ? b[fd].len * 2 : CBUFFSIZE) < 0)
 	    syslog (LOG_DEBUG, "resize_cbuff session %d failed",fd);
 	}
       }
@@ -501,7 +501,7 @@ int main(int argc,char** argv)
 	      } else if (b[fd].left == 0) {
 		// no delimiter, buffer full, so double size
 		syslog (LOG_DEBUG, "resizing buffer for session %d",fd);
-		if (resize_cbuff(b+fd,b[fd].len * 2) < 0)
+		if (resize_cbuff(b+fd,b[fd].len ? b[fd].len * 2 : CBUFFSIZE) < 0)
 		  syslog (LOG_DEBUG, "resize_cbuff session %d failed",fd);
 	      }
 	    }
@@ -529,7 +529,7 @@ int main(int argc,char** argv)
 	}	    
       } else if (b[tty].left == 0)
 	// no delimiter, buffer full, so double size
-	if (resize_cbuff(b+tty,b[tty].len * 2) < 0)
+	if (resize_cbuff(b+tty,b[tty].len ? b[tty].len * 2 : CBUFFSIZE) < 0)
 	  syslog (LOG_DEBUG, "resize_cbuff tty failed");
     }
   }
