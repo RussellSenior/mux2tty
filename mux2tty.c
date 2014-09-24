@@ -58,7 +58,7 @@ int tty = 0;
 
 char* ttystr = NULL;
 char* baudstr = "57600";
-char* portstr = "4610";
+char* portstr = "4660";
 
 struct termios tp, save;
 
